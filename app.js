@@ -31,9 +31,9 @@ const participantSchema = joi.object({
 
 const messageSchema = joi.object({
   from: joi.string().required(),
-  to: joi.string().required(),
-  text: joi.string().required(),
-  type: joi.string().required(),
+  to: joi.string().trim().required(),
+  text: joi.string().trim().required(),
+  type: joi.string().valid('message', 'private_message').required(),
   time: joi.string().required()
 });
 
@@ -102,12 +102,60 @@ app.post("/participants", async (req, res) => {
 
 //Rota /messages
 app.get("/messages", async (req, res) => {
+  const limit = parseInt(req.query.limit); //pega a quantidade de mensagens que deve ser mostrada
+  const user = req.headers.user; //Pega o nome do usuário vindo do header da requisição
   try {
     await startConection();
     const messagesCollection = db.collection('messages');
-    const messages = await messagesCollection.find().toArray();
+    console.log("limit");
+    console.log(limit);
+    const messages = await messagesCollection.find({$or:[{to: 'Todos'}, {from: user}, {to: user}]})
+                                              .sort({_id:-1})
+                                              .limit(limit)
+                                              .toArray();
     await endConection();
-    res.send(messages);
+    res.send(messages.reverse());
+  } catch (error) {
+    await endConection();
+    res.sendStatus(500);
+    return;
+  }
+});
+
+app.post("/messages", async (req, res) => {
+  const from = req.headers.user; 
+  const {to, text, type} = req.body;
+  const time = dayjs().locale('pt-br').format('HH:mm:ss');
+  const message = {
+    from,
+    to,
+    text, 
+    type,
+    time
+  };
+  const validation = messageSchema.validate(message, { abortEarly: false });
+
+  if (validation.error) {
+    console.log(validation.error.message); //apagar depois
+    res.sendStatus(422);
+    return;
+  }
+
+  try {
+    await startConection();
+    const participantsCollection = db.collection('participants');
+    const userExists = await participantsCollection.findOne({name: from});
+    if (!userExists) {
+      await endConection();
+      console.log("O remetente da mensagem não existe."); //remover depois
+      res.sendStatus(422);
+      return;
+    }
+    const messagesCollection = db.collection('messages');
+    await messagesCollection.insertOne(message);
+    await endConection();
+    res.sendStatus(201); 
+    return;
   } catch (error) {
     await endConection();
     res.sendStatus(500);
