@@ -63,7 +63,7 @@ app.post("/participants", async (req, res) => {
   const validation = participantSchema.validate(participant, { abortEarly: false });
 
   if (validation.error) {
-    /* console.log(validation.error.message); */
+    console.log(validation.error.message);
     res.sendStatus(422);
     return;
   }
@@ -107,14 +107,19 @@ app.get("/messages", async (req, res) => {
   try {
     await startConection();
     const messagesCollection = db.collection('messages');
-    console.log("limit");
-    console.log(limit);
-    const messages = await messagesCollection.find({$or:[{to: 'Todos'}, {from: user}, {to: user}]})
-                                              .sort({_id:-1})
-                                              .limit(limit)
-                                              .toArray();
-    await endConection();
+    const messages = await messagesCollection.find({
+      $or:[
+        {to: 'Todos'}, 
+        {from: user}, 
+        {to: user}, 
+        {type: 'message'}
+      ]
+    })
+      .sort({_id:-1})
+      .limit(limit)
+      .toArray();
     res.send(messages.reverse());
+    await endConection();
   } catch (error) {
     await endConection();
     res.sendStatus(500);
@@ -136,7 +141,7 @@ app.post("/messages", async (req, res) => {
   const validation = messageSchema.validate(message, { abortEarly: false });
 
   if (validation.error) {
-    console.log(validation.error.message); //apagar depois
+    console.log(validation.error.message);
     res.sendStatus(422);
     return;
   }
@@ -146,22 +151,80 @@ app.post("/messages", async (req, res) => {
     const participantsCollection = db.collection('participants');
     const userExists = await participantsCollection.findOne({name: from});
     if (!userExists) {
-      await endConection();
-      console.log("O remetente da mensagem não existe."); //remover depois
       res.sendStatus(422);
+      await endConection();
       return;
     }
     const messagesCollection = db.collection('messages');
     await messagesCollection.insertOne(message);
-    await endConection();
     res.sendStatus(201); 
+    await endConection();
     return;
+  } catch (error) {
+    res.sendStatus(500);
+    await endConection();
+    return;
+  }
+});
+
+app.post("/status", async (req, res) => {
+  const user = req.headers.user; 
+
+  try {
+    await startConection();
+    const participantsCollection = db.collection('participants');
+    const userExists = await participantsCollection.findOne({name: user});
+    if (!userExists) {
+      res.sendStatus(404);
+      await endConection();
+      return;
+    }
+    else{
+      await participantsCollection.updateOne(
+        {name: user}, 
+        {
+          $set: {lastStatus: Date.now()}
+        }
+      );
+      await endConection();
+      res.sendStatus(200); 
+      return;
+    }
   } catch (error) {
     await endConection();
     res.sendStatus(500);
     return;
   }
 });
+
+setInterval(async () => {
+  const tempoAtual = Date.now();
+  const usuariosParaRemover = [];
+  try {
+    await startConection();
+    const participants  = await db.collection('participants').find({}).toArray();
+    participants.map((participant) => {
+      if ((tempoAtual - participant.lastStatus) >= 10000) {
+        usuariosParaRemover.push(participant);
+      }
+    });
+
+    usuariosParaRemover.map( async (participant)=>{
+        await db.collection("participants").deleteOne({ _id: participant._id })
+        const time = dayjs().locale('pt-br').format('HH:mm:ss');
+        await db.collection('messages').insertOne({ 
+          from: participant.name, 
+          to: "Todos", 
+          text: 'sai da sala...', 
+          type: 'status', 
+          time 
+        })
+    });
+      
+  } catch (error) {
+    console.log(error);
+  }
+}, 15000);
 
 app.listen(5000, () => {
   console.log("🛰️  Servidor iniciado na porta 5000.");
